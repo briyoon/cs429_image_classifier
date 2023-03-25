@@ -76,7 +76,7 @@ def main():
     test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
 
     # Create model, optimizer, and loss
-    whale_classifier = WhaleClassifier(len(classes), device=device)
+    whale_classifier = WhaleClassifier(len(classes))
     optimizer = torch.optim.Adam(whale_classifier.parameters(), lr=LEARNING_RATE)
     criterion = torch.nn.CrossEntropyLoss()
 
@@ -100,9 +100,10 @@ def main():
 
             # print statistics
             running_loss += loss.item()
-            if i % 2000 == 1999:    # print every 2000 mini-batches
-                print(f'[{epoch + 1}, {i + 1:5d}] loss: {running_loss / 2000:.3f}')
-                running_loss = 0.0
+            print(i)
+            # if i % 2000 == 1999:    # print every 2000 mini-batches
+            #     print(f'[{epoch + 1}, {i + 1:5d}] loss: {running_loss / 2000:.3f}')
+            #     running_loss = 0.0
 
     print('Finished Training')
     # Save model (Saves entire model and not just weights, use whale_classifier.state_dict() to just save weights)

@@ -45,28 +45,27 @@ def main():
     # Define image transform
     transform = transforms.Compose([
         transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5)),
-        transforms.Resize((600, 600))
+        transforms.Resize((600, 600), antialias=True)
     ])
 
     # Load dataset
     annotation_file = pd.read_csv(train_annotation_path)
-    if not os.path.isfile(os.path.exists("data/class_list.txt")):
+    if not (os.path.exists("data/class_list.txt") or (os.path.isfile())):
         classes = [x for x in annotation_file["Id"].unique()]
         with open("data/class_list.txt", "w") as f:
             for x in classes:
                 f.write(f"{x}\n")
     else:
         with open("data/class_list.txt", "r") as f:
-            classes = f.read()
+            classes = f.read().splitlines()
     print(f"[{len(classes)}] number of classes detected")
 
     # Create onehot labels
-    if not os.path.isfile(os.path.exists("data/train_onehot.txt")):
-        for index, (id, class_label) in annotation_file.iterrows():
-            onehot = np.zeros(len(classes))
-            onehot[classes.index(class_label)] = 1
-            annotation_file.at[index, "Id"] = onehot
-        annotation_file.to_csv("data/train_onehot.csv")
+    for index, (id, class_label) in annotation_file.iterrows():
+        onehot = np.zeros(len(classes), dtype=np.float32)
+        onehot[classes.index(class_label)] = 1
+        annotation_file.at[index, "Id"] = onehot
+    # annotation_file.to_csv("data/train_onehot.csv")
         # f.write(f"{id},[{','.join([str(x) for x in onehot])}]\n")
 
     train_dataset = HappyWhaleDataset(annotation_file, train_img_path, transform)

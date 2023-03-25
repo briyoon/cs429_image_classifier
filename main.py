@@ -75,7 +75,7 @@ def main():
     test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
 
     # Create model, optimizer, and loss
-    whale_classifier = WhaleClassifier(len(classes))
+    whale_classifier = WhaleClassifier(len(classes)).to(device)
     optimizer = torch.optim.Adam(whale_classifier.parameters(), lr=LEARNING_RATE)
     criterion = torch.nn.CrossEntropyLoss()
 
@@ -87,6 +87,8 @@ def main():
         for i, data in enumerate(train_dataloader, 0):
             # get the inputs; data is a list of [inputs, labels]
             inputs, labels = data
+            inputs = inputs.to(device)
+            labels = labels.to(device)
 
             # zero the parameter gradients
             optimizer.zero_grad()

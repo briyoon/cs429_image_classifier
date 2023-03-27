@@ -1,3 +1,4 @@
+import time
 import os
 import argparse
 from datetime import datetime
@@ -16,8 +17,8 @@ train_img_path = "data/whales/train/"
 test_img_path = "data/whales/test/"
 
 ### HYPER PARAMETERS (change to config file) ###
-EPOCHS = 10
-BATCH_SIZE = 64
+EPOCHS = 1
+BATCH_SIZE = 128
 LEARNING_RATE = 0.001
 
 # def parse_args():
@@ -69,10 +70,10 @@ def main():
         # f.write(f"{id},[{','.join([str(x) for x in onehot])}]\n")
 
     train_dataset = HappyWhaleDataset(annotation_file, train_img_path, transform)
-    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
+    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
 
     test_dataset = HappyWhaleDataset(annotation_file, train_img_path, transform)
-    test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
+    test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
 
     # Create model, optimizer, and loss
     whale_classifier = WhaleClassifier(len(classes)).to(device)
@@ -86,52 +87,58 @@ def main():
         running_loss = 0.0
         for i, data in enumerate(train_dataloader, 0):
             # get the inputs; data is a list of [inputs, labels]
+            start = time.time()
             inputs, labels = data
             inputs = inputs.to(device)
             labels = labels.to(device)
+            # print(f"Time to load batch: {time.time() - start} seconds")
 
             # zero the parameter gradients
             optimizer.zero_grad()
 
             # forward + backward + optimize
+            # start = time.time()
             outputs = whale_classifier(inputs)
+            # print(f"Time to forward pass: {time.time() - start} seconds")
             loss = criterion(outputs, labels)
+            # start = time.time()
             loss.backward()
+            # print(f"Time to backward pass: {time.time() - start} seconds")
             optimizer.step()
 
             # print statistics
             running_loss += loss.item()
             print(i)
-            # if i % 2000 == 1999:    # print every 2000 mini-batches
-            #     print(f'[{epoch + 1}, {i + 1:5d}] loss: {running_loss / 2000:.3f}')
-            #     running_loss = 0.0
+            if i % 2000 == 1999:    # print every 2000 mini-batches
+                print(f'[{epoch + 1}, {i + 1:5d}] loss: {running_loss / 2000:.3f}')
+                running_loss = 0.0
 
     print('Finished Training')
     # Save model (Saves entire model and not just weights, use whale_classifier.state_dict() to just save weights)
-    torch.save(whale_classifier, ".pt")
+    # torch.save(whale_classifier, ".pt")
 
-    # Run inference (for now just run on train set since we dont have test labels)
-    # prepare to count predictions for each class
-    correct_pred = {classname: 0 for classname in classes}
-    total_pred = {classname: 0 for classname in classes}
+    # # Run inference (for now just run on train set since we dont have test labels)
+    # # prepare to count predictions for each class
+    # correct_pred = {classname: 0 for classname in classes}
+    # total_pred = {classname: 0 for classname in classes}
 
-    # again no gradients needed
-    with torch.no_grad():
-        for data in test_dataloader:
-            images, labels = data
-            outputs = whale_classifier(images)
-            _, predictions = torch.max(outputs, 1)
-            # collect the correct predictions for each class
-            for label, prediction in zip(labels, predictions):
-                if label == prediction:
-                    correct_pred[classes[label]] += 1
-                total_pred[classes[label]] += 1
+    # # again no gradients needed
+    # with torch.no_grad():
+    #     for data in test_dataloader:
+    #         images, labels = data
+    #         outputs = whale_classifier(images)
+    #         _, predictions = torch.max(outputs, 1)
+    #         # collect the correct predictions for each class
+    #         for label, prediction in zip(labels, predictions):
+    #             if label == prediction:
+    #                 correct_pred[classes[label]] += 1
+    #             total_pred[classes[label]] += 1
 
 
-    # print accuracy for each class
-    for classname, correct_count in correct_pred.items():
-        accuracy = 100 * float(correct_count) / total_pred[classname]
-        print(f'Accuracy for class: {classname:5s} is {accuracy:.1f} %')
+    # # print accuracy for each class
+    # for classname, correct_count in correct_pred.items():
+    #     accuracy = 100 * float(correct_count) / total_pred[classname]
+    #     print(f'Accuracy for class: {classname:5s} is {accuracy:.1f} %')
 
     # Plot and save stats
 

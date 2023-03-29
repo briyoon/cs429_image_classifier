@@ -6,15 +6,9 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import torch
-import torchvision
+from torchvision import transforms
 from torch.utils.data import DataLoader, random_split
-# import torchvision.transforms as transforms
 from tqdm import tqdm
-
-from torch.profiler import profile, record_function, ProfilerActivity
-from tqdm import tqdm
-
-from torch.profiler import profile, record_function, ProfilerActivity
 
 from whale_classifier.classifier import WhaleClassifier
 from whale_classifier.dataset import HappyWhaleDataset

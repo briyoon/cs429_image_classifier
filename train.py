@@ -8,8 +8,8 @@ import pandas as pd
 import torch
 from torchvision import transforms
 from torch.utils.data import DataLoader, random_split
-from tqdm import tqdm
 
+from utils import progress_bar
 from whale_classifier.classifier import WhaleClassifier
 from whale_classifier.dataset import HappyWhaleDataset
 
@@ -18,12 +18,12 @@ train_img_path = "data/whales/train/"
 test_img_path = "data/whales/test/"
 classes_path = "data/whales/class_list.txt"
 
-### CONFIGURATION
+### CONFIGURATION (move to config file) ###
 TRAIN_SPLIT = 0.8
 
-### HYPER PARAMETERS (change to config file) ###
-EPOCHS = 300
-BATCH_SIZE = 16
+### HYPER PARAMETERS (move to config file) ###
+EPOCHS = 5
+BATCH_SIZE = 32
 LEARNING_RATE = 0.001
 
 # def parse_args():
@@ -36,10 +36,23 @@ LEARNING_RATE = 0.001
 #     config.read(config_file)
 #     return config
 
-def train(model, dataloader, criterion, optimizer, device, epoch):
+def train(model, dataloader, criterion, optimizer, device) -> float:
+    """
+    Trains the given model for one epoch using the provided dataloader, criterion, optimizer, and device.
+
+    Args:
+        model (nn.Module): The PyTorch model to be trained.
+        dataloader (DataLoader): The DataLoader object containing the training dataset.
+        criterion (nn.Module): The loss function used to compute the training loss.
+        optimizer (optim.Optimizer): The optimization algorithm used for model training.
+        device (torch.device): The device to which tensors should be moved for computation (e.g., 'cuda' or 'cpu').
+
+    Returns:
+        float: The average training loss over the entire training dataset for one epoch.
+    """
     model.train()
     running_loss = 0.0
-    for data in (progress_bar := tqdm(dataloader, desc=f"Epoch: {epoch + 1} / {EPOCHS}")):
+    for data in (p_bar := progress_bar(dataloader)):
         inputs, labels = data
         inputs, labels = inputs.to(device), labels.to(device)
 
@@ -51,14 +64,26 @@ def train(model, dataloader, criterion, optimizer, device, epoch):
         optimizer.step()
 
         running_loss += loss.item()
-        progress_bar.set_postfix(loss=f"{loss.item():.3f}")
+        p_bar.set_postfix(loss=f"{loss.item():.3f}")
     return running_loss / len(dataloader)
 
-def validate(model, dataloader, criterion, device):
+def validate(model, dataloader, criterion, device) -> float:
+    """
+    Validates the performance of the given model using the provided dataloader, criterion, and device.
+
+    Args:
+        model (nn.Module): The PyTorch model to be evaluated.
+        dataloader (DataLoader): The DataLoader object containing the validation dataset.
+        criterion (nn.Module): The loss function used to compute the validation loss.
+        device (torch.device): The device to which tensors should be moved for computation (e.g., 'cuda' or 'cpu').
+
+    Returns:
+        float: The average validation loss over the entire validation dataset.
+    """
     model.eval()
     running_loss = 0.0
     with torch.no_grad():
-        for data in (progress_bar := tqdm(dataloader, desc="Validating")):
+        for data in (p_bar := progress_bar(dataloader, desc="Validating")):
             inputs, labels = data
             inputs, labels = inputs.to(device), labels.to(device)
 
@@ -66,11 +91,8 @@ def validate(model, dataloader, criterion, device):
             loss = criterion(outputs, labels)
 
             running_loss += loss.item()
-            progress_bar.set_postfix(loss=f"{loss.item():.3f}")
+            p_bar.set_postfix(val_loss=f"{loss.item():.3f}")
     return running_loss / len(dataloader)
-
-def inference():
-    pass
 
 def get_device() -> torch.device:
     """
@@ -118,6 +140,7 @@ def main():
         transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5)),
     ])
 
+    # Load dataset and create dataloaders
     dataset = HappyWhaleDataset(train_annotation_path, train_img_path, classes_path, transform)
     train_size = int(TRAIN_SPLIT * len(dataset))
     val_size = len(dataset) - train_size
@@ -131,22 +154,22 @@ def main():
     # whale_classifier = torch.compile(WhaleClassifier(len(dataset.classes)).to(device))
     whale_classifier = WhaleClassifier(len(dataset.classes)).to(device)
     # optimizer = torch.optim.Adam(whale_classifier.parameters(), lr=LEARNING_RATE)
-    optimizer = torch.optim.SGD(whale_classifier.parameters(), lr=0.001, momentum=0.9)
+    optimizer = torch.optim.SGD(whale_classifier.parameters(), lr=LEARNING_RATE, momentum=0.9)
     criterion = torch.nn.CrossEntropyLoss()
 
     # Train
     print("training model...")
     for epoch in range(EPOCHS):
+        print(f"Epoch {epoch + 1}/{EPOCHS}")
         train_loss = train(whale_classifier, train_dataloader, criterion, optimizer, device, epoch)
         val_loss = validate(whale_classifier, val_dataloader, criterion, device)
 
     print('Finished Training')
-    # Save model
+
+    # Save model and model parameters
     torch.save(whale_classifier.state_dict(), f"models/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.pth")
 
-    # Run inference (for now just run on train set since we dont have test labels)
-
-    # Plot results
+    # Plot and save training results
 
 
 if __name__ == "__main__":

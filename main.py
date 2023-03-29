@@ -1,13 +1,17 @@
 import os
 import argparse
+import configparser
 from datetime import datetime
 
 import numpy as np
 import pandas as pd
 import torch
 import torchvision
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, random_split
 # import torchvision.transforms as transforms
+from tqdm import tqdm
+
+from torch.profiler import profile, record_function, ProfilerActivity
 from tqdm import tqdm
 
 from torch.profiler import profile, record_function, ProfilerActivity
@@ -18,160 +22,138 @@ from whale_classifier.dataset import HappyWhaleDataset
 train_annotation_path = "data/whales/train.csv"
 train_img_path = "data/whales/train/"
 test_img_path = "data/whales/test/"
+classes_path = "data/whales/class_list.txt"
+
+### CONFIGURATION
+TRAIN_SPLIT = 0.8
 
 ### HYPER PARAMETERS (change to config file) ###
-EPOCHS = 10
-BATCH_SIZE = 32
+EPOCHS = 300
+BATCH_SIZE = 16
 LEARNING_RATE = 0.001
 
 # def parse_args():
-#     argument_parser = argparse.ArgumentParser()
+#     parser = argparse.ArgumentParser(description="Train a whale classifier")
+#     parser.add_argument("--config", type=str, default="config.ini", help="Path to the configuration file")
+#     return parser.parse_args()
 
-#     # load config
-#     argument_parser.add_argument("--config", type=str, default="config.py")
+# def load_config(config_file):
+#     config = configparser.ConfigParser()
+#     config.read(config_file)
+#     return config
 
-#     return argument_parser.parse_args()
+def train(model, dataloader, criterion, optimizer, device, epoch):
+    model.train()
+    running_loss = 0.0
+    for data in (progress_bar := tqdm(dataloader, desc=f"Epoch: {epoch + 1} / {EPOCHS}")):
+        inputs, labels = data
+        inputs, labels = inputs.to(device), labels.to(device)
+
+        optimizer.zero_grad(set_to_none=True)
+
+        outputs = model(inputs)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+
+        running_loss += loss.item()
+        progress_bar.set_postfix(loss=f"{loss.item():.3f}")
+    return running_loss / len(dataloader)
+
+def validate(model, dataloader, criterion, device):
+    model.eval()
+    running_loss = 0.0
+    with torch.no_grad():
+        for data in (progress_bar := tqdm(dataloader, desc="Validating")):
+            inputs, labels = data
+            inputs, labels = inputs.to(device), labels.to(device)
+
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+
+            running_loss += loss.item()
+            progress_bar.set_postfix(loss=f"{loss.item():.3f}")
+    return running_loss / len(dataloader)
+
+def inference():
+    pass
+
+def get_device() -> torch.device:
+    """
+    Determines the best available device (CUDA, MPS, or CPU) for PyTorch operations.
+
+    This function checks for the availability of devices in the following order:
+    1. CUDA
+    2. MPS (if built)
+    3. CPU
+
+    If CUDA is available, it sets the device to 'cuda' and prints the CUDA device name.
+    If CUDA is not available but MPS is built, it checks for MPS availability.
+        - If MPS is available, it sets the device to 'mps' and prints that it's using the MPS device.
+        - If MPS is built but not available, it defaults to the CPU and prints a message.
+    If neither CUDA nor MPS is built, it defaults to the CPU.
+
+    Returns:
+        torch.device: The best available device for PyTorch operations ('cuda', 'mps', or 'cpu').
+    """
+    device = None
+
+    # Check for CUDA
+    if torch.cuda.is_available():
+        device = 'cuda'
+        print(f"Using CUDA device: {torch.cuda.get_device_name(0)}")
+    elif torch.backends.mps.is_built():
+        if torch.backends.mps.is_available():
+            device = 'mps'
+            print("Using MPS device")
+        else:
+            print("MPS device is built but not available. Using CPU instead.")
+    else:
+        device = 'cpu'
+        print("Using CPU")
+
+    return torch.device(device)
 
 def main():
-    ### Device checks ###
-    if torch.cuda.is_available(): # NVIDIA GPU ACCELERATION
-        device = torch.device("cuda:0")
-        print("Running on NVIDIA GPU")
-    elif torch.backends.mps.is_built(): # M1 GPU ACCELERATION
-        device = torch.device("mps")
-        print("Running on M1 GPU")
-    else:
-        device = torch.device("cpu")
-        print("Running on CPU")
-
-    device = torch.device(device)
+    device = get_device()
 
     # Define image transform
-    transform = torchvision.transforms.Compose([
-        torchvision.transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5)),
-        torchvision.transforms.Resize((224, 224), antialias=True)
+    transform = transforms.Compose([
+        transforms.Resize((300, 300), antialias=True),
+        transforms.ToTensor(),
+        transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5)),
     ])
 
-    # # Load dataset
-    # print("loading dataset...")
-    # annotation_file = pd.read_csv(train_annotation_path)
-    # if not os.path.exists("data/whales/class_list.txt"):
-    #     classes = [x for x in annotation_file["Id"].unique()]
-    #     with open("data/whales/class_list.txt", "w") as f:
-    #         for x in classes:
-    #             f.write(f"{x}\n")
-    # else:
-    #     with open("data/whales/class_list.txt", "r") as f:
-    #         classes = f.read().splitlines()
-    # print(f"[{len(classes)}] number of classes detected")
+    dataset = HappyWhaleDataset(train_annotation_path, train_img_path, classes_path, transform)
+    train_size = int(TRAIN_SPLIT * len(dataset))
+    val_size = len(dataset) - train_size
+    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
-    # # Create onehot labels
-    # print("creating onehot labels...")
-    # for index, (id, class_label) in annotation_file.iterrows():
-    #     onehot = np.zeros(len(classes), dtype=np.float32)
-    #     onehot[classes.index(class_label)] = 1
-    #     annotation_file.at[index, "Id"] = onehot
-
-    # Load dataset
-    print("loading dataset...")
-    annotation_file = pd.read_csv(train_annotation_path)
-    if not os.path.exists("data/class_list.txt"):
-        classes = [x for x in annotation_file["Id"].unique()]
-        with open("data/class_list.txt", "w") as f:
-            for x in classes:
-                f.write(f"{x}\n")
-    else:
-        with open("data/class_list.txt", "r") as f:
-            classes = f.read().splitlines()
-    print(f"[{len(classes)}] number of classes detected")
-
-    # Load image, perform normalize and transform, and create onehot labels
-    for index, (id, class_label) in annotation_file.iterrows():
-        # image
-        # image = torchvision.io.read_image(os.path.join(train_img_path, id), mode=torchvision.io.ImageReadMode.RGB).float()
-        # image = torchvision.transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5))(image)
-        # image = torchvision.transforms.Resize((224, 224), antialias=True)(image)
-        # images.append(image)
-
-        # label
-        onehot = np.zeros(len(classes), dtype=np.float32)
-        onehot[classes.index(class_label)] = 1
-        # labels.append(onehot)
-        annotation_file.at[index, "Id"] = onehot
-
-    train_dataset = HappyWhaleDataset(annotation_file, train_img_path, transform)
-    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=12, pin_memory=True)
-
-    test_dataset = HappyWhaleDataset(annotation_file, train_img_path, transform)
-    test_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=12, pin_memory=True)
+    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=os.cpu_count() - 1, pin_memory=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=os.cpu_count() - 1, pin_memory=True)
 
     # Create model, optimizer, and loss
     print("creating model...")
-    whale_classifier = WhaleClassifier(len(classes)).to(device)
-    whale_classifier = torch.compile(whale_classifier)
-    optimizer = torch.optim.Adam(whale_classifier.parameters(), lr=LEARNING_RATE)
+    # whale_classifier = torch.compile(WhaleClassifier(len(dataset.classes)).to(device))
+    whale_classifier = WhaleClassifier(len(dataset.classes)).to(device)
+    # optimizer = torch.optim.Adam(whale_classifier.parameters(), lr=LEARNING_RATE)
+    optimizer = torch.optim.SGD(whale_classifier.parameters(), lr=0.001, momentum=0.9)
     criterion = torch.nn.CrossEntropyLoss()
 
     # Train
-    # whale_classifier.train(train_dataloader)
     print("training model...")
-    # whale_classifier.train()
-
-    for epoch in range(EPOCHS): # loop over the dataset multiple times
-        running_loss = 0.0
-        for data in (progress_bar := tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{EPOCHS}")):
-            # get the inputs; data is a list of [inputs, labels]
-            inputs, labels = data
-            if device != torch.device("cpu"):
-                inputs = inputs.to(device)
-                labels = labels.to(device)
-
-            # zero the parameter gradients
-            optimizer.zero_grad(set_to_none=True)
-
-            # forward + backward + optimize
-            outputs = whale_classifier(inputs)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
-
-            # print statistics
-            running_loss += loss.item()
-            progress_bar.set_postfix(loss=f"{loss.item():.3f}")
-            # print("\r", f"Epoch: {epoch+1}/{EPOCHS} | Batch: {i+1}/{len(train_dataloader)} | ETA: {} | Loss: {running_loss / (i+1):.3f}", end="")
+    for epoch in range(EPOCHS):
+        train_loss = train(whale_classifier, train_dataloader, criterion, optimizer, device, epoch)
+        val_loss = validate(whale_classifier, val_dataloader, criterion, device)
 
     print('Finished Training')
-    # Save model (Saves entire model and not just weights, use whale_classifier.state_dict() to just save weights)
-    # torch.save(whale_classifier, ".pt")
+    # Save model
+    torch.save(whale_classifier.state_dict(), f"models/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.pth")
 
     # Run inference (for now just run on train set since we dont have test labels)
-    # prepare to count predictions for each class
-    correct_pred = {classname: 0 for classname in classes}
-    total_pred = {classname: 0 for classname in classes}
 
-    # again no gradients needed
-    with torch.no_grad():
-        for data in test_dataloader:
-            images, labels = data
-            if device != torch.device("cpu"):
-                inputs = inputs.to(device)
-                labels = labels.to(device)
+    # Plot results
 
-            outputs = whale_classifier(images)
-            _, predictions = torch.max(outputs, 1)
-            # collect the correct predictions for each class
-            for label, prediction in zip(labels, predictions):
-                if label == prediction:
-                    correct_pred[classes[label]] += 1
-                total_pred[classes[label]] += 1
-
-
-    # print accuracy for each class
-    for classname, correct_count in correct_pred.items():
-        accuracy = 100 * float(correct_count) / total_pred[classname]
-        print(f'Accuracy for class: {classname:5s} is {accuracy:.1f} %')
-
-    # # Plot and save stats
 
 if __name__ == "__main__":
     # args = parse_args()

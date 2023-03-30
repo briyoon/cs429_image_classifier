@@ -13,7 +13,7 @@ from tqdm import tqdm
 from matplotlib import pyplot as plt
 
 from utils import progress_bar
-from whale_classifier import CNN0, CNN1
+from whale_classifier import CNN0, CNN1, ResNet50
 from whale_classifier.dataset import HappyWhaleTrainDataset, TestDataset
 
 train_annotation_path = "data/whales/train.csv"
@@ -27,8 +27,8 @@ TRAIN_SPLIT = 0.8
 ### HYPER PARAMETERS (move to config file) ###
 EPOCHS = 50
 BATCH_SIZE = 32
-LEARNING_RATE = 0.003
-WEIGHT_DECAY = 0.003
+LEARNING_RATE = 0.03
+WEIGHT_DECAY = 0.03
 
 # def parse_args():
 #     parser = argparse.ArgumentParser(description="Train a whale classifier")
@@ -80,8 +80,8 @@ def train(model, dataloader, criterion, optimizer, device) -> float:
         running_loss += loss.item()
         p_bar.set_postfix({
             "loss": f"{loss.item():.3f}",
-            "oneshot_acc": f"{oneshot_acc_count / ((idx + 1) * dataloader.batch_size):.3f}",
-            "fiveshot_acc": f"{fiveshot_acc_count / ((idx + 1) * dataloader.batch_size):.3f}"
+            "oneshot_acc": f"{oneshot_acc_count / ((idx + 1) * dataloader.batch_size) * 100:.2f}",
+            "fiveshot_acc": f"{fiveshot_acc_count / ((idx + 1) * dataloader.batch_size) * 100:.2f}"
         })
     num_images = len(dataloader) * dataloader.batch_size
     num_batches = len(dataloader)
@@ -124,8 +124,8 @@ def validate(model, dataloader, classes, criterion, device) -> float:
             running_loss += loss.item()
             p_bar.set_postfix({
                 "val_loss": f"{loss.item():.3f}",
-                "val_oneshot_acc": f"{oneshot_acc_count / ((idx + 1) * dataloader.batch_size):.3f}",
-                "val_fiveshot_acc": f"{fiveshot_acc_count / ((idx + 1) * dataloader.batch_size):.3f}"
+                "val_oneshot_acc": f"{oneshot_acc_count / ((idx + 1) * dataloader.batch_size) * 100:.2f}",
+                "val_fiveshot_acc": f"{fiveshot_acc_count / ((idx + 1) * dataloader.batch_size) * 100:.2f}"
             })
 
     return running_loss / num_batches, oneshot_acc_count / num_images, fiveshot_acc_count / num_images
@@ -191,7 +191,7 @@ def main():
 
     # Create model, optimizer, and loss
     print("creating model...")
-    whale_classifier = CNN1(len(dataset.classes)).to(device)
+    whale_classifier = ResNet50(3, len(dataset.classes)).to(device)
     optimizer = torch.optim.Adam(whale_classifier.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     # optimizer = torch.optim.SGD(whale_classifier.parameters(), lr=LEARNING_RATE, momentum=0.9)
     criterion = torch.nn.CrossEntropyLoss()

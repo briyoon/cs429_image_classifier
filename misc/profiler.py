@@ -2,7 +2,7 @@
 import torch
 import numpy as np
 
-from whale_classifier.classifier import WhaleClassifier
+from whale_classifier.cnn0 import WhaleClassifier
 
 model = WhaleClassifier(len(np.zeros(4251))).cuda()
 inputs = torch.randn(32, 3, 224, 224).cuda()

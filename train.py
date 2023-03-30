@@ -8,14 +8,15 @@ import pandas as pd
 import torch
 from torchvision import transforms
 from torch.utils.data import DataLoader, random_split
+from tqdm import tqdm
+from matplotlib import pyplot as plt
 
 from utils import progress_bar
-from whale_classifier.classifier import WhaleClassifier
-from whale_classifier.dataset import HappyWhaleDataset
+from whale_classifier import CNN0, CNN1
+from whale_classifier.dataset import HappyWhaleTrainDataset
 
 train_annotation_path = "data/whales/train.csv"
 train_img_path = "data/whales/train/"
-test_img_path = "data/whales/test/"
 classes_path = "data/whales/class_list.txt"
 
 ### CONFIGURATION (move to config file) ###
@@ -24,7 +25,8 @@ TRAIN_SPLIT = 0.8
 ### HYPER PARAMETERS (move to config file) ###
 EPOCHS = 5
 BATCH_SIZE = 32
-LEARNING_RATE = 0.001
+LEARNING_RATE = 0.003
+WEIGHT_DECAY = 0.003
 
 # def parse_args():
 #     parser = argparse.ArgumentParser(description="Train a whale classifier")
@@ -52,7 +54,9 @@ def train(model, dataloader, criterion, optimizer, device) -> float:
     """
     model.train()
     running_loss = 0.0
-    for data in (p_bar := progress_bar(dataloader)):
+    oneshot_acc_count = 0
+    fiveshot_acc_count = 0
+    for data in progress_bar(dataloader):
         inputs, labels = data
         inputs, labels = inputs.to(device), labels.to(device)
 
@@ -63,11 +67,21 @@ def train(model, dataloader, criterion, optimizer, device) -> float:
         loss.backward()
         optimizer.step()
 
+        # 5_shot and 1_shot acc
+        _, predicted_classes = torch.topk(outputs, 5, 1)
+        for label, predicted_class in zip(labels, predicted_classes):
+            label_index = torch.argmax(label)
+            oneshot_acc_count += 1 if label_index == predicted_class[0] else 0
+            fiveshot_acc_count += 1 if label_index in predicted_class else 0
+
+        # loss
         running_loss += loss.item()
         p_bar.set_postfix(loss=f"{loss.item():.3f}")
-    return running_loss / len(dataloader)
+    num_images = len(dataloader) * dataloader.batch_size
+    num_batches = len(dataloader)
+    return running_loss / num_batches, oneshot_acc_count / num_images, fiveshot_acc_count / num_images
 
-def validate(model, dataloader, criterion, device) -> float:
+def validate(model, dataloader, classes, criterion, device) -> float:
     """
     Validates the performance of the given model using the provided dataloader, criterion, and device.
 
@@ -82,6 +96,8 @@ def validate(model, dataloader, criterion, device) -> float:
     """
     model.eval()
     running_loss = 0.0
+    oneshot_acc_count = 0
+    fiveshot_acc_count = 0
     with torch.no_grad():
         for data in (p_bar := progress_bar(dataloader, desc="Validating")):
             inputs, labels = data
@@ -90,9 +106,18 @@ def validate(model, dataloader, criterion, device) -> float:
             outputs = model(inputs)
             loss = criterion(outputs, labels)
 
+            # 5_shot and 1_shot acc
+            _, predicted_classes = torch.topk(outputs, 5, 1)
+            for label, predicted_class in zip(labels, predicted_classes):
+                label_index = torch.argmax(label)
+                oneshot_acc_count += 1 if label_index == predicted_class[0] else 0
+                fiveshot_acc_count += 1 if label_index in predicted_class else 0
+
             running_loss += loss.item()
             p_bar.set_postfix(val_loss=f"{loss.item():.3f}")
-    return running_loss / len(dataloader)
+    num_images = len(dataloader) * dataloader.batch_size
+    num_batches = len(dataloader)
+    return running_loss / num_batches, oneshot_acc_count / num_images, fiveshot_acc_count / num_images
 
 def get_device() -> torch.device:
     """
@@ -135,13 +160,13 @@ def main():
 
     # Define image transform
     transform = transforms.Compose([
-        transforms.Resize((300, 300), antialias=True),
+        transforms.Resize((224, 224), antialias=True),
         transforms.ToTensor(),
         transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5)),
     ])
 
     # Load dataset and create dataloaders
-    dataset = HappyWhaleDataset(train_annotation_path, train_img_path, classes_path, transform)
+    dataset = HappyWhaleTrainDataset(train_annotation_path, train_img_path, classes_path, transform)
     train_size = int(TRAIN_SPLIT * len(dataset))
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
@@ -149,28 +174,51 @@ def main():
     train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=os.cpu_count() - 1, pin_memory=True)
     val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=os.cpu_count() - 1, pin_memory=True)
 
+    classes = dataset.classes
+
     # Create model, optimizer, and loss
     print("creating model...")
-    # whale_classifier = torch.compile(WhaleClassifier(len(dataset.classes)).to(device))
-    whale_classifier = WhaleClassifier(len(dataset.classes)).to(device)
-    # optimizer = torch.optim.Adam(whale_classifier.parameters(), lr=LEARNING_RATE)
-    optimizer = torch.optim.SGD(whale_classifier.parameters(), lr=LEARNING_RATE, momentum=0.9)
+    whale_classifier = CNN0(len(dataset.classes)).to(device)
+    optimizer = torch.optim.Adam(whale_classifier.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+    # optimizer = torch.optim.SGD(whale_classifier.parameters(), lr=LEARNING_RATE, momentum=0.9)
     criterion = torch.nn.CrossEntropyLoss()
 
     # Train
     print("training model...")
+    history = {"loss": [], "val_loss": [], "oneshot_acc": [], "fiveshot_acc": [], "oneshot_val_acc": [], "fiveshot_val_acc": []}
     for epoch in range(EPOCHS):
         print(f"Epoch {epoch + 1}/{EPOCHS}")
-        train_loss = train(whale_classifier, train_dataloader, criterion, optimizer, device, epoch)
-        val_loss = validate(whale_classifier, val_dataloader, criterion, device)
+        loss, oneshot_acc, fiveshot_acc = train(whale_classifier, train_dataloader, criterion, optimizer, device)
+        val_loss, oneshot_val_acc, fiveshot_val_acc = validate(whale_classifier, val_dataloader, classes, criterion, device)
+        history["loss"].append(loss)
+        history["oneshot_acc"].append(oneshot_acc)
+        history["fiveshot_acc"].append(fiveshot_acc)
+        history["val_loss"].append(val_loss)
+        history["oneshot_val_acc"].append(oneshot_val_acc)
+        history["fiveshot_val_acc"].append(fiveshot_val_acc)
 
     print('Finished Training')
 
     # Save model and model parameters
-    torch.save(whale_classifier.state_dict(), f"models/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.pth")
+    filename = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    torch.save(whale_classifier.state_dict(), f"models/filename/{filename}.pth")
 
     # Plot and save training results
+    loss_fig, loss_ax = plt.subplots(1)
+    acc_fig, acc_ax = plt.subplots(1)
 
+    loss_ax.plot(history["loss"], label="Training Loss")
+    loss_ax.plot(history["val_loss"], label="Validation Loss")
+    acc_ax.plot(history["oneshot_acc"], label="1-shot Training Accuracy")
+    acc_ax.plot(history["fiveshot_acc"], label="5-shot Training Accuracy")
+    acc_ax.plot(history["oneshot_val_acc"], label="1-shot Validation Accuracy")
+    acc_ax.plot(history["fiveshot_val_acc"], label="5-shot Validation Accuracy")
+
+    loss_fig.legend()
+    acc_fig.legend()
+
+    loss_fig.savefig(f"results/filename/{filename}_loss.png", dpi=300)
+    acc_fig.savefig(f"results/filename/{filename}_acc.png", dpi=300)
 
 if __name__ == "__main__":
     # args = parse_args()

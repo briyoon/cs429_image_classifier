@@ -5,7 +5,7 @@ from PIL import Image
 from torchvision.transforms.functional import to_tensor
 from torch.utils.data import Dataset
 
-class HappyWhaleDataset(Dataset):
+class HappyWhaleTrainDataset(Dataset):
     def __init__(self, annotation_path, img_dir, classes_path, transform=None, target_transform=None, cache_images=False):
         annotation_file = pd.read_csv(annotation_path)
 
@@ -55,3 +55,21 @@ class HappyWhaleDataset(Dataset):
             label = self.target_transform(label)
 
         return image, label
+
+class TestDataset(Dataset):
+    def __init__(self, img_dir, transform=None):
+        self.img_dir = img_dir
+        self.image_files = os.listdir(img_dir)
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.image_files)
+
+    def __getitem__(self, idx):
+        img_path = os.path.join(self.img_dir, self.image_files[idx])
+
+        image = Image.open(img_path).convert("RGB")
+        if self.transform:
+            image = self.transform(image)
+
+        return image, self.image_files[idx]

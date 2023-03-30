@@ -19,8 +19,8 @@ class progress_bar():
     def __next__(self):
         return self.tqdm_bar.__next__()
 
-    def set_postfix(self, **kwargs):
-        self.tqdm_bar.set_postfix(**kwargs)
+    def set_postfix(self, ordered_dict=None, refresh=True, **kwargs):
+        self.tqdm_bar.set_postfix(ordered_dict, refresh, **kwargs)
 
 
 # test

@@ -7,14 +7,17 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import torch
-from torchvision import transforms
+from torch import nn
+from torch import optim
+from torchvision import transforms, models
 from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
 from matplotlib import pyplot as plt
 
 from utils import progress_bar
-from whale_classifier import CNN0, CNN1, ResNet50
 from whale_classifier.dataset import HappyWhaleTrainDataset, TestDataset
+
+from utils import progress_bar
 
 train_annotation_path = "data/whales/train.csv"
 train_img_path = "data/whales/train/"
@@ -25,20 +28,61 @@ test_img_path = "data/whales/test/"
 TRAIN_SPLIT = 0.8
 
 ### HYPER PARAMETERS (move to config file) ###
-EPOCHS = 50
+EPOCHS = 500
 BATCH_SIZE = 32
 LEARNING_RATE = 0.03
 WEIGHT_DECAY = 0.03
 
-# def parse_args():
-#     parser = argparse.ArgumentParser(description="Train a whale classifier")
-#     parser.add_argument("--config", type=str, default="config.ini", help="Path to the configuration file")
-#     return parser.parse_args()
+# cudnn.benchmark = True
+# plt.ion()   # interactive mode
 
-# def load_config(config_file):
-#     config = configparser.ConfigParser()
-#     config.read(config_file)
-#     return config
+def get_device() -> torch.device:
+    """
+    Determines the best available device (CUDA, MPS, or CPU) for PyTorch operations.
+
+    This function checks for the availability of devices in the following order:
+    1. CUDA
+    2. MPS (if built)
+    3. CPU
+
+    If CUDA is available, it sets the device to 'cuda' and prints the CUDA device name.
+    If CUDA is not available but MPS is built, it checks for MPS availability.
+        - If MPS is available, it sets the device to 'mps' and prints that it's using the MPS device.
+        - If MPS is built but not available, it defaults to the CPU and prints a message.
+    If neither CUDA nor MPS is built, it defaults to the CPU.
+
+    Returns:
+        torch.device: The best available device for PyTorch operations ('cuda', 'mps', or 'cpu').
+    """
+    device = None
+
+    # Check for CUDA
+    if torch.cuda.is_available():
+        device = 'cuda'
+        print(f"Using CUDA device: {torch.cuda.get_device_name(0)}")
+    elif torch.backends.mps.is_built():
+        if torch.backends.mps.is_available():
+            device = 'mps'
+            print("Using MPS device")
+        else:
+            print("MPS device is built but not available. Using CPU instead.")
+    else:
+        device = 'cpu'
+        print("Using CPU")
+
+    return torch.device(device)
+
+def imshow(inp, title=None):
+    """Imshow for Tensor."""
+    inp = inp.numpy().transpose((1, 2, 0))
+    mean = np.array([0.485, 0.456, 0.406])
+    std = np.array([0.229, 0.224, 0.225])
+    inp = std * inp + mean
+    inp = np.clip(inp, 0, 1)
+    plt.imshow(inp)
+    if title is not None:
+        plt.title(title)
+    plt.pause(0.001)  # pause a bit so that plots are updated
 
 def train(model, dataloader, criterion, optimizer, device) -> float:
     """
@@ -130,79 +174,109 @@ def validate(model, dataloader, classes, criterion, device) -> float:
 
     return running_loss / num_batches, oneshot_acc_count / num_images, fiveshot_acc_count / num_images
 
-def get_device() -> torch.device:
-    """
-    Determines the best available device (CUDA, MPS, or CPU) for PyTorch operations.
+def visualize_model(model, num_images=6):
+    was_training = model.training
+    model.eval()
+    images_so_far = 0
+    fig = plt.figure()
 
-    This function checks for the availability of devices in the following order:
-    1. CUDA
-    2. MPS (if built)
-    3. CPU
+    with torch.no_grad():
+        for i, (inputs, labels) in enumerate(val_dataloader):
+            inputs = inputs.to(device)
+            labels = labels.to(device)
 
-    If CUDA is available, it sets the device to 'cuda' and prints the CUDA device name.
-    If CUDA is not available but MPS is built, it checks for MPS availability.
-        - If MPS is available, it sets the device to 'mps' and prints that it's using the MPS device.
-        - If MPS is built but not available, it defaults to the CPU and prints a message.
-    If neither CUDA nor MPS is built, it defaults to the CPU.
+            outputs = model(inputs)
+            _, preds = torch.max(outputs, 1)
 
-    Returns:
-        torch.device: The best available device for PyTorch operations ('cuda', 'mps', or 'cpu').
-    """
-    device = None
+            for j in range(inputs.size()[0]):
+                images_so_far += 1
+                ax = plt.subplot(num_images//2, 2, images_so_far)
+                ax.axis('off')
+                ax.set_title(f'predicted: {class_names[preds[j]]}')
+                imshow(inputs.cpu().data[j])
 
-    # Check for CUDA
-    if torch.cuda.is_available():
-        device = 'cuda'
-        print(f"Using CUDA device: {torch.cuda.get_device_name(0)}")
-    elif torch.backends.mps.is_built():
-        if torch.backends.mps.is_available():
-            device = 'mps'
-            print("Using MPS device")
-        else:
-            print("MPS device is built but not available. Using CPU instead.")
-    else:
-        device = 'cpu'
-        print("Using CPU")
+                if images_so_far == num_images:
+                    model.train(mode=was_training)
+                    return
+        model.train(mode=was_training)
 
-    return torch.device(device)
+if __name__ == "__main__":
 
-def main():
-    device = get_device()
+    # Data augmentation and normalization for training
+    # Just normalization for validation
+    data_transforms = {
+        'train': transforms.Compose([
+            transforms.RandomResizedCrop(224),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ]),
+        'val': transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ]),
+        'test': transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ]),
+    }
 
-    # Define image transform
-    transform = transforms.Compose([
-        transforms.Resize((224, 224), antialias=True),
-        transforms.ToTensor(),
-        transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5)),
-    ])
-
+    data_dir = 'data/whales'
     # Load dataset and create dataloaders
-    dataset = HappyWhaleTrainDataset(train_annotation_path, train_img_path, classes_path, transform)
+    dataset = HappyWhaleTrainDataset(train_annotation_path, train_img_path, classes_path, data_transforms["train"])
     train_size = int(TRAIN_SPLIT * len(dataset))
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
-    test_dataset = TestDataset(test_img_path, transform)
+    test_dataset = TestDataset(test_img_path, data_transforms["test"])
 
     train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=os.cpu_count() - 1, pin_memory=True)
     val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=os.cpu_count() - 1, pin_memory=True)
     test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=os.cpu_count() - 1)
 
-    classes = dataset.classes
+    # dataloaders = {'train': train_dataloader, 'val': val_dataloader, 'test': test_dataloader}
+    # dataset_sizes = {x: len(dataloaders[x]) for x in ['train', 'val', 'test']}
 
-    # Create model, optimizer, and loss
-    print("creating model...")
-    whale_classifier = ResNet50(3, len(dataset.classes)).to(device)
-    optimizer = torch.optim.Adam(whale_classifier.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
-    # optimizer = torch.optim.SGD(whale_classifier.parameters(), lr=LEARNING_RATE, momentum=0.9)
-    criterion = torch.nn.CrossEntropyLoss()
+    dataset_sizes = {'train': train_size, 'val': val_size}
+
+    device = get_device()
+    class_names = dataset.classes
+
+    # # Get a batch of training data
+    # inputs, class_names = next(iter(train_dataloader))
+
+    # # Make a grid from batch
+    # out = torchvision.utils.make_grid(inputs)
+
+    # imshow(out, title=[x for x in class_names])
+
+    model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
+    num_ftrs = model.fc.in_features
+    # Here the size of each output sample is set to 2.
+    # Alternatively, it can be generalized to nn.Linear(num_ftrs, len(class_names)).
+    model.fc = nn.Linear(num_ftrs, len(class_names))
+
+    model = model.to(device)
+
+    criterion = nn.CrossEntropyLoss()
+
+    # Observe that all parameters are being optimized
+    # optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.001, momentum=0.9)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+    # Decay LR by a factor of 0.1 every 7 epochs
+    exp_lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
 
     # Train
     print("training model...")
     history = {"loss": [], "val_loss": [], "oneshot_acc": [], "fiveshot_acc": [], "oneshot_val_acc": [], "fiveshot_val_acc": []}
     for epoch in range(EPOCHS):
         print(f"Epoch {epoch + 1}/{EPOCHS}")
-        loss, oneshot_acc, fiveshot_acc = train(whale_classifier, train_dataloader, criterion, optimizer, device)
-        val_loss, oneshot_val_acc, fiveshot_val_acc = validate(whale_classifier, val_dataloader, classes, criterion, device)
+        loss, oneshot_acc, fiveshot_acc = train(model, train_dataloader, criterion, optimizer, device)
+        val_loss, oneshot_val_acc, fiveshot_val_acc = validate(model, val_dataloader, class_names, criterion, device)
         history["loss"].append(loss)
         history["oneshot_acc"].append(oneshot_acc)
         history["fiveshot_acc"].append(fiveshot_acc)
@@ -215,18 +289,18 @@ def main():
     # Save model and model parameters
     filename = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     os.makedirs(f"models/{filename}", exist_ok=True)
-    torch.save(whale_classifier.state_dict(), f"models/{filename}/{filename}.pth")
+    torch.save(model.state_dict(), f"models/{filename}/{filename}.pth")
 
     # run inference
     results = []
-    whale_classifier.eval()
+    model.eval()
     with torch.no_grad():
         for images, image_names in test_dataloader:
             images, image_names = images.to(device), image_names
-            outputs = whale_classifier(images)
+            outputs = model(images)
             _, predicted_classes = torch.topk(outputs, 5, 1)
             for image_name, predicted_class in zip(image_names, predicted_classes):
-                results.append((image_name, [classes[x.item()] for x in predicted_class]))
+                results.append((image_name, [class_names[x.item()] for x in predicted_class]))
 
     # save results to csv
     with open(f"submissions/{filename}.csv", "w", newline="") as csvfile:
@@ -258,7 +332,3 @@ def main():
 
     loss_fig.savefig(f"models/{filename}/{filename}_loss.png", dpi=300)
     acc_fig.savefig(f"models/{filename}/{filename}_acc.png", dpi=300)
-
-if __name__ == "__main__":
-    # args = parse_args()
-    main()

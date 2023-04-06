@@ -2,39 +2,31 @@ import os
 import csv
 import argparse
 import configparser
+import json
 from datetime import datetime
+import importlib
+import sys
 
 import numpy as np
-import pandas as pd
 import torch
 from torch import nn
 from torch import optim
 from torchvision import transforms, models
 from torch.utils.data import DataLoader, random_split
-from tqdm import tqdm
 from matplotlib import pyplot as plt
 
-from utils import progress_bar
 from whale_classifier.dataset import HappyWhaleTrainDataset, TestDataset
-
-from utils import progress_bar
+from utils import ProgressBar, Config
 
 train_annotation_path = "data/whales/train.csv"
 train_img_path = "data/whales/train/"
 classes_path = "data/whales/class_list.txt"
 test_img_path = "data/whales/test/"
 
-### CONFIGURATION (move to config file) ###
-TRAIN_SPLIT = 0.8
-
-### HYPER PARAMETERS (move to config file) ###
-EPOCHS = 500
-BATCH_SIZE = 32
-LEARNING_RATE = 0.03
-WEIGHT_DECAY = 0.03
-
-# cudnn.benchmark = True
-# plt.ion()   # interactive mode
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train a whale classifier")
+    parser.add_argument("--config", type=str, default="config.ini", help="Path to the configuration file")
+    return parser.parse_args()
 
 def get_device() -> torch.device:
     """
@@ -102,7 +94,7 @@ def train(model, dataloader, criterion, optimizer, device) -> float:
     running_loss = 0.0
     oneshot_acc_count = 0
     fiveshot_acc_count = 0
-    for idx, data in enumerate(p_bar := progress_bar(dataloader)):
+    for idx, data in enumerate(p_bar := ProgressBar(dataloader)):
         inputs, labels = data
         inputs, labels = inputs.to(device), labels.to(device)
 
@@ -151,7 +143,7 @@ def validate(model, dataloader, classes, criterion, device) -> float:
     oneshot_acc_count = 0
     fiveshot_acc_count = 0
     with torch.no_grad():
-        for idx, data in enumerate(p_bar := progress_bar(dataloader, desc="Validating")):
+        for idx, data in enumerate(p_bar := ProgressBar(dataloader, desc="Validating")):
             inputs, labels = data
             inputs, labels = inputs.to(device), labels.to(device)
 
@@ -174,36 +166,21 @@ def validate(model, dataloader, classes, criterion, device) -> float:
 
     return running_loss / num_batches, oneshot_acc_count / num_images, fiveshot_acc_count / num_images
 
-def visualize_model(model, num_images=6):
-    was_training = model.training
+def test(model, dataloader, class_names, device):
+    results = []
     model.eval()
-    images_so_far = 0
-    fig = plt.figure()
-
     with torch.no_grad():
-        for i, (inputs, labels) in enumerate(val_dataloader):
-            inputs = inputs.to(device)
-            labels = labels.to(device)
+        for images, image_names in dataloader:
+            images, image_names = images.to(device), image_names
+            outputs = model(images)
+            _, predicted_classes = torch.topk(outputs, 5, 1)
+            for image_name, predicted_class in zip(image_names, predicted_classes):
+                results.append((image_name, [class_names[x.item()] for x in predicted_class]))
 
-            outputs = model(inputs)
-            _, preds = torch.max(outputs, 1)
+    return results
 
-            for j in range(inputs.size()[0]):
-                images_so_far += 1
-                ax = plt.subplot(num_images//2, 2, images_so_far)
-                ax.axis('off')
-                ax.set_title(f'predicted: {class_names[preds[j]]}')
-                imshow(inputs.cpu().data[j])
-
-                if images_so_far == num_images:
-                    model.train(mode=was_training)
-                    return
-        model.train(mode=was_training)
-
-if __name__ == "__main__":
-
+def main(args, cf: Config):
     # Data augmentation and normalization for training
-    # Just normalization for validation
     data_transforms = {
         'train': transforms.Compose([
             transforms.RandomResizedCrop(224),
@@ -225,56 +202,35 @@ if __name__ == "__main__":
         ]),
     }
 
-    data_dir = 'data/whales'
     # Load dataset and create dataloaders
     dataset = HappyWhaleTrainDataset(train_annotation_path, train_img_path, classes_path, data_transforms["train"])
-    train_size = int(TRAIN_SPLIT * len(dataset))
+    train_size = int(cf.train_split * len(dataset))
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
     test_dataset = TestDataset(test_img_path, data_transforms["test"])
 
-    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=os.cpu_count() - 1, pin_memory=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=os.cpu_count() - 1, pin_memory=True)
-    test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=os.cpu_count() - 1)
-
-    # dataloaders = {'train': train_dataloader, 'val': val_dataloader, 'test': test_dataloader}
-    # dataset_sizes = {x: len(dataloaders[x]) for x in ['train', 'val', 'test']}
-
-    dataset_sizes = {'train': train_size, 'val': val_size}
+    train_dataloader = DataLoader(train_dataset, batch_size=cf.batch_size, shuffle=True, num_workers=os.cpu_count() - 1, pin_memory=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=cf.batch_size, shuffle=True, num_workers=os.cpu_count() - 1, pin_memory=True)
+    test_dataloader = DataLoader(test_dataset, batch_size=cf.batch_size, shuffle=False, num_workers=os.cpu_count() - 1)
 
     device = get_device()
-    class_names = dataset.classes
+    class_names = dataset.class_names
 
-    # # Get a batch of training data
-    # inputs, class_names = next(iter(train_dataloader))
-
-    # # Make a grid from batch
-    # out = torchvision.utils.make_grid(inputs)
-
-    # imshow(out, title=[x for x in class_names])
-
-    model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
-    num_ftrs = model.fc.in_features
-    # Here the size of each output sample is set to 2.
-    # Alternatively, it can be generalized to nn.Linear(num_ftrs, len(class_names)).
-    model.fc = nn.Linear(num_ftrs, len(class_names))
+    # Initialize model
+    model: nn.Module = cf.model
 
     model = model.to(device)
 
-    criterion = nn.CrossEntropyLoss()
+    criterion = cf.criterion
 
-    # Observe that all parameters are being optimized
-    # optimizer_ft = optim.SGD(model_ft.parameters(), lr=0.001, momentum=0.9)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-
-    # Decay LR by a factor of 0.1 every 7 epochs
-    exp_lr_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
+    # All parameters are being optimized
+    optimizer = cf.optimizer
 
     # Train
     print("training model...")
     history = {"loss": [], "val_loss": [], "oneshot_acc": [], "fiveshot_acc": [], "oneshot_val_acc": [], "fiveshot_val_acc": []}
-    for epoch in range(EPOCHS):
-        print(f"Epoch {epoch + 1}/{EPOCHS}")
+    for epoch in range(cf.epochs):
+        print(f"Epoch {epoch + 1}/{cf.epochs}")
         loss, oneshot_acc, fiveshot_acc = train(model, train_dataloader, criterion, optimizer, device)
         val_loss, oneshot_val_acc, fiveshot_val_acc = validate(model, val_dataloader, class_names, criterion, device)
         history["loss"].append(loss)
@@ -292,15 +248,7 @@ if __name__ == "__main__":
     torch.save(model.state_dict(), f"models/{filename}/{filename}.pth")
 
     # run inference
-    results = []
-    model.eval()
-    with torch.no_grad():
-        for images, image_names in test_dataloader:
-            images, image_names = images.to(device), image_names
-            outputs = model(images)
-            _, predicted_classes = torch.topk(outputs, 5, 1)
-            for image_name, predicted_class in zip(image_names, predicted_classes):
-                results.append((image_name, [class_names[x.item()] for x in predicted_class]))
+    results = test(model, test_dataloader, class_names, device)
 
     # save results to csv
     with open(f"submissions/{filename}.csv", "w", newline="") as csvfile:
@@ -332,3 +280,17 @@ if __name__ == "__main__":
 
     loss_fig.savefig(f"models/{filename}/{filename}_loss.png", dpi=300)
     acc_fig.savefig(f"models/{filename}/{filename}_acc.png", dpi=300)
+
+    # save model config
+    with open(f"models/{filename}/{filename}_config.txt", "w") as f:
+        f.write(str(cf))
+
+if __name__ == "__main__":
+    args = parse_args()
+
+    spec = importlib.util.spec_from_file_location("config", args.config)
+    config = importlib.util.module_from_spec(spec)
+    sys.modules["config"] = config
+    spec.loader.exec_module(config)
+
+    main(args, config.CONFIG)

@@ -1,6 +1,6 @@
 from tqdm import tqdm
 
-class progress_bar():
+class ProgressBar():
     """
     Wrapper for tqdm to handle setup and formatting.
     """
@@ -32,5 +32,5 @@ if __name__ == "__main__":
 
     EPOCHS = 5
     for epoch in range(1, EPOCHS + 1):
-        for i in progress_bar(iterable, epoch, EPOCHS, ascii=".>=", ):
+        for i in ProgressBar(iterable, epoch, EPOCHS, ascii=".>=", ):
             time.sleep(0.01)

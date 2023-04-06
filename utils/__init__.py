@@ -1,1 +1,2 @@
-from utils.progress_bar import progress_bar
+from utils.progress_bar import ProgressBar
+from utils.config import Config

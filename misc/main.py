@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
 from matplotlib import pyplot as plt
 
-from utils import progress_bar
+from utils import ProgressBar
 from whale_classifier import CNN0, CNN1, ResNet50
 from whale_classifier.dataset import HappyWhaleTrainDataset, TestDataset
 
@@ -22,13 +22,13 @@ classes_path = "data/whales/class_list.txt"
 test_img_path = "data/whales/test/"
 
 ### CONFIGURATION (move to config file) ###
-TRAIN_SPLIT = 0.8
+train_split = 0.8
 
 ### HYPER PARAMETERS (move to config file) ###
 EPOCHS = 50
-BATCH_SIZE = 32
+batch_size = 32
 LEARNING_RATE = 0.03
-WEIGHT_DECAY = 0.03
+weight_decay = 0.03
 
 # def parse_args():
 #     parser = argparse.ArgumentParser(description="Train a whale classifier")
@@ -58,7 +58,7 @@ def train(model, dataloader, criterion, optimizer, device) -> float:
     running_loss = 0.0
     oneshot_acc_count = 0
     fiveshot_acc_count = 0
-    for idx, data in enumerate(p_bar := progress_bar(dataloader)):
+    for idx, data in enumerate(p_bar := ProgressBar(dataloader)):
         inputs, labels = data
         inputs, labels = inputs.to(device), labels.to(device)
 
@@ -107,7 +107,7 @@ def validate(model, dataloader, classes, criterion, device) -> float:
     oneshot_acc_count = 0
     fiveshot_acc_count = 0
     with torch.no_grad():
-        for idx, data in enumerate(p_bar := progress_bar(dataloader, desc="Validating")):
+        for idx, data in enumerate(p_bar := ProgressBar(dataloader, desc="Validating")):
             inputs, labels = data
             inputs, labels = inputs.to(device), labels.to(device)
 
@@ -178,21 +178,21 @@ def main():
 
     # Load dataset and create dataloaders
     dataset = HappyWhaleTrainDataset(train_annotation_path, train_img_path, classes_path, transform)
-    train_size = int(TRAIN_SPLIT * len(dataset))
+    train_size = int(train_split * len(dataset))
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
     test_dataset = TestDataset(test_img_path, transform)
 
-    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=os.cpu_count() - 1, pin_memory=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=os.cpu_count() - 1, pin_memory=True)
-    test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=os.cpu_count() - 1)
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=os.cpu_count() - 1, pin_memory=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True, num_workers=os.cpu_count() - 1, pin_memory=True)
+    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=os.cpu_count() - 1)
 
-    classes = dataset.classes
+    classes = dataset.class_names
 
     # Create model, optimizer, and loss
     print("creating model...")
-    whale_classifier = ResNet50(3, len(dataset.classes)).to(device)
-    optimizer = torch.optim.Adam(whale_classifier.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+    whale_classifier = ResNet50(3, len(dataset.class_names)).to(device)
+    optimizer = torch.optim.Adam(whale_classifier.parameters(), lr=LEARNING_RATE, weight_decay=weight_decay)
     # optimizer = torch.optim.SGD(whale_classifier.parameters(), lr=LEARNING_RATE, momentum=0.9)
     criterion = torch.nn.CrossEntropyLoss()
 

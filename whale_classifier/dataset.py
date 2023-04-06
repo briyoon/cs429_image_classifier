@@ -11,18 +11,18 @@ class HappyWhaleTrainDataset(Dataset):
 
         # Create class list
         if not os.path.exists(classes_path):
-            self.classes = [x for x in annotation_file["Id"].unique()]
+            self.class_names = [x for x in annotation_file["Id"].unique()]
             with open(classes_path, "w") as f:
-                for x in self.classes:
+                for x in self.class_names:
                     f.write(f"{x}\n")
         else:
             with open(classes_path, "r") as f:
-                self.classes = f.read().splitlines()
+                self.class_names = f.read().splitlines()
 
         # Create onehot labels
         for index, (id, class_label) in annotation_file.iterrows():
-            onehot = np.zeros(len(self.classes), dtype=np.float32)
-            onehot[self.classes.index(class_label)] = 1
+            onehot = np.zeros(len(self.class_names), dtype=np.float32)
+            onehot[self.class_names.index(class_label)] = 1
             annotation_file.at[index, "Id"] = onehot
 
         self.onehot_labels = annotation_file
